@@ -1,0 +1,13 @@
+// tsconfig.json
+{
+  "compilerOptions": {
+    "target": "esnext", // Use modern JavaScript features
+    "module": "nodenext", // Use Node's native ES module system
+    "moduleResolution": "nodenext", // Helps the compiler resolve imports correctly
+    "outDir": "./dist", // Output compiled JS files to the 'dist' directory
+    "esModuleInterop": true, // Recommended for compatibility
+    "strict": true, // Enable all strict type-checking options
+    "skipLibCheck": true // Skip type checking of declaration files
+  },
+  "include": ["src/**/*"] // Tell TypeScript to look for source files in 'src'
+}

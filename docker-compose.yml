@@ -1,0 +1,88 @@
+version: "3.8"
+
+services:
+  gazorpazorp:
+    build: .
+    ports:
+      - "3000:3000"
+      - "9090:9090" # Metrics
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - BACKEND_URL=http://backend:8080
+      - REDIS_URL=redis://redis:6379
+      - LLM_DEEP_MODEL=llama3:8b
+      - LLM_FAST_MODEL=tinyllama
+      - OLLAMA_HOST=http://ollama:11434
+    depends_on:
+      - redis
+      - ollama
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_INSTALL_PLUGINS=redis-datasource
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  backend:
+    # Your actual backend service
+    image: your-backend:latest
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  ollama-models:
+  prometheus-data:
+  grafana-data:
