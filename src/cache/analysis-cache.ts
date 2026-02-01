@@ -8,6 +8,26 @@ interface CacheConfig {
   enableStats: boolean;
 }
 
+/**
+ * Reputation bucket for cache segmentation.
+ * This prevents cache poisoning where a high-reputation agent's
+ * cached "safe" result could be returned for a low-reputation agent.
+ *
+ * Security consideration: An attacker with stolen high-reputation credentials
+ * could poison the cache with "safe" results. By segmenting the cache by
+ * reputation bucket, we ensure that analysis results are only reused for
+ * agents with similar trust levels.
+ */
+type ReputationBucket = "untrusted" | "low" | "medium" | "high" | "trusted";
+
+function getReputationBucket(reputation: number): ReputationBucket {
+  if (reputation >= 90) return "trusted";
+  if (reputation >= 70) return "high";
+  if (reputation >= 50) return "medium";
+  if (reputation >= 30) return "low";
+  return "untrusted";
+}
+
 export class AnalysisCache {
   private redis: Redis;
   private config: CacheConfig;
@@ -27,10 +47,17 @@ export class AnalysisCache {
   }
 
   /**
-   * Generate cache key from request
-   * Normalizes IDs and similar patterns for better hit rate
+   * Generate cache key from request and reputation bucket.
+   * Normalizes IDs and similar patterns for better hit rate.
+   *
+   * SECURITY: The reputation bucket is included in the key to prevent
+   * cache poisoning attacks where a malicious actor with valid credentials
+   * could seed the cache with "safe" results.
    */
-  private generateKey(request: { method: string; path: string; body: unknown }): string {
+  private generateKey(
+    request: { method: string; path: string; body: unknown },
+    reputationBucket: ReputationBucket
+  ): string {
     // Normalize path - replace numeric IDs with :id
     const normalizedPath = request.path
       .replace(/\/\d+/g, "/:id")
@@ -42,7 +69,8 @@ export class AnalysisCache {
     const composite = JSON.stringify({
       method: request.method,
       path: normalizedPath,
-      bodyHash
+      bodyHash,
+      reputationBucket // Include reputation bucket in cache key
     });
 
     const key = createHash("sha256").update(composite).digest("hex");
@@ -50,8 +78,12 @@ export class AnalysisCache {
     return `${this.config.keyPrefix}${key}`;
   }
 
-  async get(request: { method: string; path: string; body: unknown }): Promise<AnalysisResult | null> {
-    const key = this.generateKey(request);
+  async get(
+    request: { method: string; path: string; body: unknown },
+    reputation: number
+  ): Promise<AnalysisResult | null> {
+    const bucket = getReputationBucket(reputation);
+    const key = this.generateKey(request, bucket);
 
     const cached = await this.redis.get(key);
 
@@ -64,21 +96,38 @@ export class AnalysisCache {
     return null;
   }
 
-  async set(request: { method: string; path: string; body: unknown }, result: AnalysisResult): Promise<void> {
-    const key = this.generateKey(request);
+  async set(
+    request: { method: string; path: string; body: unknown },
+    result: AnalysisResult,
+    reputation: number
+  ): Promise<void> {
+    const bucket = getReputationBucket(reputation);
+    const key = this.generateKey(request, bucket);
 
     await this.redis.setex(key, this.config.ttl, JSON.stringify(result));
 
     if (this.config.enableStats) this.stats.sets++;
   }
 
+  /**
+   * Invalidate cache entries matching a pattern.
+   * Uses SCAN instead of KEYS to avoid blocking Redis on large datasets.
+   */
   async invalidate(pattern?: string): Promise<number> {
     const searchPattern = pattern || `${this.config.keyPrefix}*`;
-    const keys = await this.redis.keys(searchPattern);
+    let cursor = "0";
+    let deleted = 0;
 
-    if (keys.length === 0) return 0;
+    do {
+      const [newCursor, keys] = await this.redis.scan(cursor, "MATCH", searchPattern, "COUNT", 100);
+      cursor = newCursor;
 
-    return await this.redis.del(...keys);
+      if (keys.length > 0) {
+        deleted += await this.redis.del(...keys);
+      }
+    } while (cursor !== "0");
+
+    return deleted;
   }
 
   getStats() {
@@ -113,8 +162,8 @@ export class CachedIntentAnalyzer extends IntentAnalyzer {
     request: { method: string; path: string; body: unknown },
     agentContext: { reputation: number; history: string[] }
   ): Promise<AnalysisResult> {
-    // Try cache first
-    const cached = await this.cache.get(request);
+    // Try cache first - now includes reputation bucket for security
+    const cached = await this.cache.get(request, agentContext.reputation);
     if (cached) {
       return {
         ...cached,
@@ -125,8 +174,8 @@ export class CachedIntentAnalyzer extends IntentAnalyzer {
     // Cache miss - do real analysis
     const result = await super.analyzeIntent(request, agentContext);
 
-    // Cache for future
-    await this.cache.set(request, result);
+    // Cache for future - segmented by reputation bucket
+    await this.cache.set(request, result, agentContext.reputation);
 
     return result;
   }
