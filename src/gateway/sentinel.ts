@@ -5,6 +5,7 @@ import { CryptoVerifier } from "../crypto/agent-identity.js";
 import { SignedRequest } from "../crypto/agent-identity.js";
 import { IntentAnalyzer } from "../semantic/intent-analyzer.js";
 import { PolicyEngine, PolicyContext } from "../policy/engine.js";
+import { ChallengeService, createChallengeResponse } from "../challenge/challenge-service.js";
 import { Redis } from "ioredis";
 
 export class SentinelGateway {
@@ -12,6 +13,7 @@ export class SentinelGateway {
   protected cryptoVerifier: CryptoVerifier;
   protected intentAnalyzer: IntentAnalyzer;
   protected policyEngine: PolicyEngine;
+  protected challengeService: ChallengeService;
   protected redis: Redis;
   private backendUrl: string;
 
@@ -25,6 +27,7 @@ export class SentinelGateway {
       fastModel: config.llmFastModel
     });
     this.policyEngine = new PolicyEngine(this.redis);
+    this.challengeService = new ChallengeService(this.redis);
 
     this.setupMiddleware();
   }
@@ -32,12 +35,44 @@ export class SentinelGateway {
   private setupMiddleware(): void {
     this.app.use(express.json({ limit: "1mb" }));
 
+    // Challenge verification endpoint (before auth middleware)
+    this.app.post("/api/challenge/verify", this.handleChallengeVerification.bind(this));
+
     // Middleware chain
     this.app.use(this.cryptoMiddleware.bind(this));
     this.app.use(this.semanticMiddleware.bind(this));
     this.app.use(this.policyMiddleware.bind(this));
     this.app.get("/health", (req, res) => res.status(200).json({ status: "healthy" }));
     this.app.use(this.proxyMiddleware());
+  }
+
+  /**
+   * Handle challenge verification requests
+   */
+  private async handleChallengeVerification(req: Request, res: Response): Promise<void> {
+    const { challengeId, solution } = req.body;
+
+    if (!challengeId || !solution) {
+      res.status(400).json({
+        error: "Missing required fields",
+        required: ["challengeId", "solution"]
+      });
+      return;
+    }
+
+    const result = await this.challengeService.verifyChallenge({ challengeId, solution });
+
+    if (result.valid) {
+      res.status(200).json({
+        status: "verified",
+        message: "Challenge completed successfully. You may now retry your original request."
+      });
+    } else {
+      res.status(400).json({
+        status: "failed",
+        error: result.error
+      });
+    }
   }
 
   /**
@@ -84,6 +119,24 @@ export class SentinelGateway {
    */
   protected async semanticMiddleware(req: Request, res: Response, next: NextFunction): Promise<void> {
     const context = (req as any).sentinelContext;
+
+    // Check if this is a retry after a completed challenge
+    const challengeId = req.headers["x-challenge-id"] as string;
+    if (challengeId) {
+      const completed = await this.challengeService.isChallengeCompleted(challengeId);
+      if (completed) {
+        // Challenge was completed, allow the request with reduced scrutiny
+        context.analysis = {
+          isMalicious: false,
+          confidence: 0.7,
+          explanation: "Request allowed after challenge completion",
+          suggestedAction: "allow",
+          riskScore: 30
+        };
+        next();
+        return;
+      }
+    }
 
     // Get agent's request history for context
     const historyKey = `agent:${context.agent.id}:history`;
@@ -166,6 +219,7 @@ export class SentinelGateway {
     };
 
     const decision = await this.policyEngine.evaluate(policyContext);
+    context.decision = decision;
 
     switch (decision.action.type) {
       case "deny":
@@ -177,18 +231,44 @@ export class SentinelGateway {
         return;
 
       case "rate_limit":
-        const limited = await this.checkRateLimit(context.agent.id, decision.action.params as any);
-        if (limited) {
-          res.status(429).json({ error: "Rate limit exceeded" });
+        const rateLimitResult = await this.checkRateLimit(context.agent.id, decision.action.params as any);
+        if (rateLimitResult.limited) {
+          res.status(429).json({
+            error: "Rate limit exceeded",
+            retryAfter: rateLimitResult.resetIn,
+            remaining: rateLimitResult.remaining
+          });
           return;
         }
         break;
 
       case "challenge":
-        // Implement challenge-response mechanism
-        // For now, just log and continue
-        await this.logSecurityEvent("challenge_issued", { agentId: context.agent.id });
-        break;
+        // Issue a challenge to the agent
+        const pendingChallenges = await this.challengeService.getPendingChallengeCount(context.agent.id);
+
+        // Limit pending challenges per agent to prevent abuse
+        if (pendingChallenges >= 5) {
+          res.status(429).json({
+            error: "Too many pending challenges",
+            message: "Complete existing challenges before making new requests"
+          });
+          return;
+        }
+
+        const challenge = await this.challengeService.issueChallenge(context.agent.id, context.analysis.riskScore);
+
+        await this.logSecurityEvent("challenge_issued", {
+          agentId: context.agent.id,
+          challengeId: challenge.id,
+          challengeType: challenge.type,
+          riskScore: context.analysis.riskScore
+        });
+
+        const baseUrl = `${req.protocol}://${req.get("host")}`;
+        const challengeResponse = createChallengeResponse(challenge, baseUrl);
+
+        res.status(401).json(challengeResponse);
+        return;
     }
 
     next();
@@ -213,15 +293,34 @@ export class SentinelGateway {
     });
   }
 
-  private async checkRateLimit(agentId: string, params: { maxRequests: number; windowSeconds: number }): Promise<boolean> {
+  /**
+   * Check rate limit and return detailed information
+   */
+  private async checkRateLimit(
+    agentId: string,
+    params: { maxRequests: number; windowSeconds: number }
+  ): Promise<{ limited: boolean; remaining: number; resetIn: number }> {
     const key = `ratelimit:${agentId}`;
-    const current = await this.redis.incr(key);
 
-    if (current === 1) {
+    // Use a transaction for atomicity
+    const multi = this.redis.multi();
+    multi.incr(key);
+    multi.ttl(key);
+
+    const results = await multi.exec();
+    const current = results?.[0]?.[1] as number;
+    let ttl = results?.[1]?.[1] as number;
+
+    if (current === 1 || ttl === -1) {
       await this.redis.expire(key, params.windowSeconds);
+      ttl = params.windowSeconds;
     }
 
-    return current > params.maxRequests;
+    return {
+      limited: current > params.maxRequests,
+      remaining: Math.max(0, params.maxRequests - current),
+      resetIn: ttl
+    };
   }
 
   private async logSecurityEvent(event: string, data: unknown): Promise<void> {
