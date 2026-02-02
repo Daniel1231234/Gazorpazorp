@@ -58,10 +58,10 @@ export class AnalysisCache {
     request: { method: string; path: string; body: unknown },
     reputationBucket: ReputationBucket
   ): string {
-    // Normalize path - replace numeric IDs with :id
+    // Normalize path - replace UUIDs first, then numeric IDs
     const normalizedPath = request.path
-      .replace(/\/\d+/g, "/:id")
-      .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, ":uuid");
+      .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, ":uuid")
+      .replace(/\/\d+(?=\/|$)/g, "/:id");
 
     // Hash body content
     const bodyHash = createHash("sha256").update(JSON.stringify(request.body)).digest("hex");

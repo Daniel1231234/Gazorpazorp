@@ -139,7 +139,7 @@ export class CryptoVerifier {
       const payloadString = JSON.stringify(signedPayload);
       const publicKey = createPublicKey(publicKeyPem);
 
-      const isValid = verify("sha256", Buffer.from(payloadString), publicKey, Buffer.from(signatureHex, "hex"));
+      const isValid = verify(null, Buffer.from(payloadString), publicKey, Buffer.from(signatureHex, "hex"));
 
       if (!isValid) {
         // Decrease reputation for failed signature
@@ -176,7 +176,7 @@ export class AgentKeyGenerator {
     };
 
     const privateKey = createPrivateKey(privateKeyPem);
-    const signature = sign("sha256", Buffer.from(JSON.stringify(signedPayload)), privateKey).toString("hex");
+    const signature = sign(null, Buffer.from(JSON.stringify(signedPayload)), privateKey).toString("hex");
 
     return { signedPayload, signature };
   }

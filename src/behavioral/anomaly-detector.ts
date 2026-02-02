@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { Redis } from "ioredis";
-import { SentinelGateway } from "../gateway/gazorpazorp.js";
+import { SentinelGateway } from "../gateway/sentinel.js";
 
 interface AgentProfile {
   id: string;

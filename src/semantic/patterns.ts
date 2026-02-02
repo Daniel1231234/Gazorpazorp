@@ -16,8 +16,8 @@ export const THREAT_PATTERNS: Record<
   RegExp[]
 > = {
   prompt_injection: [
-    /ignore\s+(all\s+)?previous\s+instructions/i,
-    /disregard\s+(the\s+)?above/i,
+    /ignore\s+(all\s+)?(the\s+)?(previous\s+)?instructions/i,
+    /disregard\s+(the\s+)?above(\s+instructions)?/i,
     /forget\s+(everything|what)\s+(you|I)\s+(told|said)/i,
     /you\s+are\s+now\s+a/i,
     /pretend\s+(you're|to\s+be)/i,
@@ -27,7 +27,7 @@ export const THREAT_PATTERNS: Record<
     /<<SYS>>/i
   ],
   data_exfiltration: [
-    /show\s+me\s+(all|the)\s+(users?|passwords?|secrets?|keys?|tokens?)/i,
+    /show\s+me\s+(all\s+)?(the\s+)?(users?|passwords?|secrets?|keys?|tokens?)/i,
     /dump\s+(the\s+)?(database|db|table)/i,
     /export\s+all/i,
     /list\s+(all\s+)?(api\s+)?keys/i
