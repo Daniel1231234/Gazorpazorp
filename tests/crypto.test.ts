@@ -3,12 +3,13 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { CryptoVerifier, AgentKeyGenerator, AgentIdentity, SignedRequest } from "../src/crypto/agent-identity.js";
 import { KeyStore } from "../src/crypto/key-store.js";
 
-// Mock Redis
+// Mock Redis with Lua script support
 const createMockRedis = () => {
   const store = new Map<string, string>();
   const expiry = new Map<string, number>();
+  const lists = new Map<string, string[]>();
 
-  return {
+  const redisMock = {
     get: vi.fn(async (key: string) => store.get(key) || null),
     set: vi.fn(async (key: string, value: string, ex?: string, ttl?: number, nx?: string) => {
       if (nx === "NX" && store.has(key)) {
@@ -32,12 +33,100 @@ const createMockRedis = () => {
       }
       return count;
     }),
+    lpush: vi.fn(async (key: string, ...values: string[]) => {
+      const list = lists.get(key) || [];
+      list.unshift(...values);
+      lists.set(key, list);
+      return list.length;
+    }),
+    ltrim: vi.fn(async (key: string, start: number, stop: number) => {
+      const list = lists.get(key) || [];
+      lists.set(key, list.slice(start, stop + 1));
+      return "OK";
+    }),
+    lrange: vi.fn(async (key: string, start: number, stop: number) => {
+      const list = lists.get(key) || [];
+      return list.slice(start, stop === -1 ? undefined : stop + 1);
+    }),
+    watch: vi.fn(async () => "OK"),
+    unwatch: vi.fn(async () => "OK"),
+    multi: vi.fn(() => {
+      const commands: Array<{ cmd: string; args: any[] }> = [];
+      const multiObj = {
+        setex: (key: string, ttl: number, value: string) => {
+          commands.push({ cmd: "setex", args: [key, ttl, value] });
+          return multiObj;
+        },
+        lpush: (key: string, value: string) => {
+          commands.push({ cmd: "lpush", args: [key, value] });
+          return multiObj;
+        },
+        ltrim: (key: string, start: number, stop: number) => {
+          commands.push({ cmd: "ltrim", args: [key, start, stop] });
+          return multiObj;
+        },
+        exec: async () => {
+          const results: Array<[null, any]> = [];
+          for (const { cmd, args } of commands) {
+            if (cmd === "setex") {
+              store.set(args[0], args[2]);
+              results.push([null, "OK"]);
+            } else if (cmd === "lpush") {
+              const list = lists.get(args[0]) || [];
+              list.unshift(args[1]);
+              lists.set(args[0], list);
+              results.push([null, list.length]);
+            } else if (cmd === "ltrim") {
+              const list = lists.get(args[0]) || [];
+              lists.set(args[0], list.slice(args[1], args[2] + 1));
+              results.push([null, "OK"]);
+            }
+          }
+          return results;
+        }
+      };
+      return multiObj;
+    }),
+    defineCommand: vi.fn((name: string, options: any) => {
+      (redisMock as any)[name] = vi.fn(async (...args: any[]) => {
+        if (name === "updateReputationAtomic") {
+          const [identityKey, logKey, delta, timestamp, reason] = args;
+          const data = store.get(identityKey);
+          if (!data) return [-1, 0];
+          const identity = JSON.parse(data);
+          const oldRep = identity.reputation;
+          identity.reputation = Math.max(0, Math.min(100, oldRep + delta));
+          identity.lastSeen = timestamp;
+          store.set(identityKey, JSON.stringify(identity));
+
+          // Log to list
+          const list = lists.get(logKey) || [];
+          list.unshift(JSON.stringify({
+            timestamp,
+            oldReputation: oldRep,
+            newReputation: identity.reputation,
+            delta,
+            reason
+          }));
+          lists.set(logKey, list.slice(0, 100));
+
+          return [identity.reputation, 1];
+        }
+        if (name === "conditionalUpdate") {
+          return [0, 1];
+        }
+        return [0, 1];
+      });
+    }),
     _store: store,
+    _lists: lists,
     _clear: () => {
       store.clear();
       expiry.clear();
+      lists.clear();
     }
   };
+  return redisMock;
 };
 
 describe("AgentKeyGenerator", () => {
@@ -145,8 +234,9 @@ describe("KeyStore", () => {
 
       await keyStore.saveIdentity(identity);
 
-      expect(redis.set).toHaveBeenCalledWith(
+      expect(redis.setex).toHaveBeenCalledWith(
         "agent:identity:abc123",
+        expect.any(Number),
         expect.any(String)
       );
     });

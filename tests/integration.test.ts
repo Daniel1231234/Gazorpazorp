@@ -44,6 +44,11 @@ const createMockRedis = () => {
     }),
     ltrim: vi.fn(async () => "OK"),
     zcount: vi.fn(async () => 0),
+    scan: vi.fn(async (cursor: string, match: string, pattern: string, count: string, countVal: number) => {
+      const regex = new RegExp(pattern.replace(/\*/g, ".*"));
+      const keys = Array.from(store.keys()).filter((k) => regex.test(k));
+      return ["0", keys];
+    }),
     _store: store,
     _lists: lists,
     _clear: () => {
