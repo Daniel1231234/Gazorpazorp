@@ -2,6 +2,7 @@ import { THREAT_PATTERNS, ThreatType } from "./patterns.js";
 import { ANALYSIS_PROMPT } from "./prompts/analysis.js";
 import { z } from "zod";
 import { CircuitBreaker } from "../utils/circuit-breaker.js";
+import { logger } from "../utils/logger.js";
 
 const LlmResponseSchema = z.object({
   isMalicious: z.boolean(),
@@ -167,7 +168,10 @@ export class IntentAnalyzer {
 
       // If circuit is open, log the issue
       if (isCircuitOpen) {
-        console.warn("Circuit breaker OPEN - LLM service unavailable");
+        logger.warn("LLM service unavailable", {
+          circuitState,
+          component: "IntentAnalyzer"
+        });
       }
 
       // Implement Fail-Closed / Robust Fallback

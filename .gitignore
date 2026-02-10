@@ -1,2 +1,6 @@
 node_modules
 dist
+logs
+config.json
+config.yaml
+config.yml

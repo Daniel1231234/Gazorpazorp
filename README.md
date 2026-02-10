@@ -210,22 +210,78 @@ Agent Request
 
 ### Installation
 
+**Option 1: Docker Compose (Recommended)**
+
+The easiest way to get started is using Docker Compose, which starts all required services:
+
 ```bash
 # Clone the repository
 git clone https://github.com/yourusername/gazorpazorp
 cd gazorpazorp
 
+# Start all services (Gateway + Redis + Ollama + Prometheus + Grafana)
+docker-compose up -d
+
+# Pull LLM models into Ollama
+docker exec -it gazorpazorp-ollama-1 ollama pull llama3:8b
+docker exec -it gazorpazorp-ollama-1 ollama pull tinyllama
+
+# View logs
+docker-compose logs -f gazorpazorp
+```
+
+**Services Started:**
+- `gazorpazorp` - Security gateway (port 3000)
+- `redis` - Data store (port 6379)
+- `ollama` - LLM inference (port 11434)
+- `prometheus` - Metrics collection (port 9091)
+- `grafana` - Monitoring dashboard (port 3001)
+- `backend` - Your backend service (port 8080)
+
+**Option 2: Local Development**
+
+For development with hot-reload:
+
+```bash
 # Install dependencies
 npm install
 
-# Start infrastructure (Redis + Ollama)
-docker-compose up -d
+# Start infrastructure only
+docker-compose up -d redis ollama
 
 # Pull the LLM model
 ollama pull llama3:8b
 
-# Start the gateway
+# Start the gateway in dev mode
 npm run dev
+```
+
+**Docker Compose Commands:**
+
+```bash
+# Start all services
+docker-compose up -d
+
+# Start specific services
+docker-compose up -d redis ollama
+
+# View logs
+docker-compose logs -f
+
+# Stop all services
+docker-compose down
+
+# Stop and remove volumes (clears data)
+docker-compose down -v
+
+# Restart a specific service
+docker-compose restart gazorpazorp
+
+# View service status
+docker-compose ps
+
+# Execute commands in a running container
+docker exec -it gazorpazorp-redis-1 redis-cli
 ```
 
 ### Verify Installation
@@ -520,6 +576,81 @@ curl http://localhost:3000/dashboard/threats/live
 | **Hijack Detection** | ❌ | ❌ | ✅ Behavioral Anomaly |
 | **Prompt Injection** | ❌ | ❌ | ✅ LLM Detection |
 | **Challenge System** | ❌ | CAPTCHA | ✅ PoW/Signature |
+
+---
+
+## 📚 Examples
+
+### Load Testing
+
+Perform load testing with realistic agent behavior:
+
+```bash
+# Run load test with default settings (10 agents, 100 requests each)
+npx tsx examples/load_test.ts
+
+# Custom configuration
+GATEWAY_URL=http://localhost:3000 \
+NUM_AGENTS=50 \
+REQUESTS_PER_AGENT=200 \
+THINK_TIME_MS=50 \
+npx tsx examples/load_test.ts
+```
+
+**Sample Output:**
+```
+🛡️  Gazorpazorp Load Test
+
+Configuration:
+  Gateway URL: http://localhost:3000
+  Agents: 10
+  Requests per agent: 100
+  Think time: 100ms
+  Total requests: 1000
+
+🔑 Generating 10 test agents...
+✅ Generated 10 agents
+
+🏥 Checking gateway health...
+✅ Gateway is healthy
+
+🚀 Starting load test...
+[████████████████████████████████████████] 100.0% (1000/1000)
+
+📊 Load Test Results
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Duration:        12.34s
+Throughput:      81.04 req/s
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Total Requests:  1000
+✅ Successful:    847 (84.70%)
+⚠️  Challenged:    98 (9.80%)
+🚫 Rate Limited:  32 (3.20%)
+❌ Failed:        23
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Latency (ms):
+  Min:  45.00ms
+  Avg:  128.50ms
+  P50:  115.00ms
+  P95:  256.00ms
+  P99:  412.00ms
+  Max:  1024.00ms
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+The load tester:
+- Generates Ed25519 key pairs for each agent
+- Signs all requests cryptographically
+- Tracks success/failure/challenge/rate-limit rates
+- Calculates latency percentiles (P50, P95, P99)
+- Provides recommendations based on results
+
+**See [examples/load_test.ts](examples/load_test.ts) for full implementation.**
+
+### Client Integration Example
+
+Coming soon: Full example of integrating Gazorpazorp into an AI agent client.
 
 ---
 

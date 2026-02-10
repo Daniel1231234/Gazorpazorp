@@ -1,0 +1,44 @@
+{
+  "gateway": {
+    "port": 3000,
+    "backendUrl": "http://localhost:8080",
+    "maxPayloadSize": 1048576,
+    "corsEnabled": false,
+    "corsOrigins": []
+  },
+  "redis": {
+    "url": "redis://localhost:6379",
+    "keyPrefix": "gazorpazorp:",
+    "connectionTimeout": 5000
+  },
+  "llm": {
+    "deepModel": "llama3:8b",
+    "fastModel": "tinyllama",
+    "ollamaHost": "http://localhost:11434",
+    "timeout": 10000,
+    "maxRetries": 3
+  },
+  "security": {
+    "rateLimiting": {
+      "enabled": true,
+      "maxRequestsPerMinute": 100,
+      "challengeVerificationMaxPerMinute": 10
+    },
+    "challenges": {
+      "enabled": true,
+      "ttlSeconds": 300,
+      "proofOfWorkDifficulty": 4
+    },
+    "circuitBreaker": {
+      "failureThreshold": 5,
+      "successThreshold": 3,
+      "timeoutMs": 30000
+    }
+  },
+  "observability": {
+    "metricsEnabled": true,
+    "metricsPort": 9090,
+    "logLevel": "info",
+    "structuredLogging": true
+  }
+}
