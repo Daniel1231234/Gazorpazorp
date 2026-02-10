@@ -1,17 +1,35 @@
 {
-  "name": "gazorpazorp",
+  "name": "@daniel1231234/gazorpazorp",
   "version": "1.0.0",
   "description": "Zero-Trust Security Gateway for Autonomous AI Agents",
-  "main": "dist/index.js",
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "start": "node dist/index.js",
-    "build": "tsc",
+    "clean": "rm -rf dist",
+    "build": "npm run clean && tsc",
+    "prepack": "npm run build",
     "dev": "tsx watch src/index.ts",
-    "test": "vitest",
-    "test:run": "vitest run",
+    "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "typecheck": "tsc --noEmit"
+    "lint": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   },
   "keywords": [
     "security",
@@ -20,7 +38,7 @@
     "gateway",
     "authentication"
   ],
-  "author": "",
+  "author": "Daniel",
   "license": "MIT",
   "devDependencies": {
     "@types/express": "^5.0.6",
