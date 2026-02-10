@@ -1,6 +1,7 @@
 import { THREAT_PATTERNS, ThreatType } from "./patterns.js";
 import { ANALYSIS_PROMPT } from "./prompts/analysis.js";
 import { z } from "zod";
+import { CircuitBreaker } from "../utils/circuit-breaker.js";
 
 const LlmResponseSchema = z.object({
   isMalicious: z.boolean(),
@@ -22,10 +23,38 @@ export interface AnalysisResult {
 export class IntentAnalyzer {
   private deepModel: string;
   private fastModel: string;
+  private readonly MAX_CONTENT_LENGTH = 10000; // 10KB limit for LLM input
+  private circuitBreaker: CircuitBreaker;
 
   constructor(config: { deepModel: string; fastModel: string }) {
     this.deepModel = config.deepModel;
     this.fastModel = config.fastModel;
+
+    // Initialize circuit breaker for LLM service
+    this.circuitBreaker = new CircuitBreaker({
+      failureThreshold: 5, // Open after 5 consecutive failures
+      successThreshold: 3, // Close after 3 consecutive successes
+      timeout: 30000, // Wait 30 seconds before half-open
+      name: "LLM Service"
+    });
+  }
+
+  /**
+   * Sanitize input before sending to LLM to prevent prompt injection.
+   * Removes control characters, limits length, and escapes special sequences.
+   */
+  private sanitizeForLLM(input: string): string {
+    return (
+      input
+        // Remove control characters (except newline and tab)
+        .replace(/[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F-\x9F]/g, "")
+        // Remove Unicode direction override characters (used in prompt injection)
+        .replace(/[\u202A-\u202E\u2066-\u2069]/g, "")
+        // Limit length to prevent resource exhaustion
+        .substring(0, this.MAX_CONTENT_LENGTH)
+        // Escape potential LLM instruction markers
+        .replace(/###|```|<\|endoftext\|>|<\|im_end\|>/g, (match) => `[${match}]`)
+    );
   }
 
   /**
@@ -59,7 +88,9 @@ export class IntentAnalyzer {
     request: { method: string; path: string; body: unknown },
     agentContext: { reputation: number; history: string[] }
   ): Promise<AnalysisResult> {
-    const content = JSON.stringify(request.body);
+    // Sanitize request body before analysis
+    const rawContent = JSON.stringify(request.body);
+    const content = this.sanitizeForLLM(rawContent);
 
     // Step 1: Fast pre-screening
     const preScreenResult = this.preScreen(content);
@@ -82,26 +113,34 @@ export class IntentAnalyzer {
     const modelToUse = needsDeepAnalysis ? this.deepModel : this.fastModel;
     const tier = needsDeepAnalysis ? "Deep" : "Fast";
 
-    // Step 4: LLM Analysis
-    const prompt = ANALYSIS_PROMPT.replace("{{method}}", request.method)
-      .replace("{{path}}", request.path)
+    // Step 4: LLM Analysis with sanitized inputs
+    const prompt = ANALYSIS_PROMPT.replace("{{method}}", this.sanitizeForLLM(request.method))
+      .replace("{{path}}", this.sanitizeForLLM(request.path))
       .replace("{{content}}", content)
       .replace("{{reputation}}", agentContext.reputation.toString())
       .replace("{{flags}}", preScreenResult.matchedThreats.join(", ") || "None");
 
     try {
-      const response = await fetch("http://localhost:11434/api/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: modelToUse,
-          prompt: prompt,
-          stream: false,
-          format: "json"
-        })
-      });
+      // Use circuit breaker to protect against LLM service failures
+      const result = await this.circuitBreaker.execute(async () => {
+        const response = await fetch("http://localhost:11434/api/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: modelToUse,
+            prompt: prompt,
+            stream: false,
+            format: "json"
+          }),
+          signal: AbortSignal.timeout(10000) // 10 second timeout
+        });
 
-      const result = await response.json();
+        if (!response.ok) {
+          throw new Error(`LLM service returned ${response.status}`);
+        }
+
+        return response.json();
+      });
 
       // Parse and Validate LLM response using Zod
       const rawAnalysis = JSON.parse(result.response);
@@ -122,7 +161,16 @@ export class IntentAnalyzer {
         riskScore: analysis.riskScore
       };
     } catch (error) {
-      // LLM Service Failure - Implement Fail-Closed / Robust Fallback
+      // LLM Service Failure (circuit open, timeout, or service error)
+      const circuitState = this.circuitBreaker.getState();
+      const isCircuitOpen = circuitState === "OPEN";
+
+      // If circuit is open, log the issue
+      if (isCircuitOpen) {
+        console.warn("Circuit breaker OPEN - LLM service unavailable");
+      }
+
+      // Implement Fail-Closed / Robust Fallback
       if (preScreenResult.suspicious) {
         return {
           isMalicious: true,

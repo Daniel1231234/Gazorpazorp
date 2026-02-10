@@ -1,6 +1,7 @@
 import { createHash } from "crypto";
 import { Redis } from "ioredis";
 import { AnalysisResult, IntentAnalyzer } from "../semantic/intent-analyzer.js";
+import { LLMConfig } from "../types/config.js";
 
 interface CacheConfig {
   ttl: number; // seconds
@@ -150,7 +151,7 @@ export class AnalysisCache {
 export class CachedIntentAnalyzer extends IntentAnalyzer {
   private cache: AnalysisCache;
 
-  constructor(config: any, redis: Redis) {
+  constructor(config: LLMConfig, redis: Redis) {
     super(config);
     this.cache = new AnalysisCache(redis, {
       ttl: 1800, // 30 minutes

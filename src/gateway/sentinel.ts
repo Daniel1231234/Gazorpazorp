@@ -7,6 +7,7 @@ import { IntentAnalyzer } from "../semantic/intent-analyzer.js";
 import { PolicyEngine, PolicyContext } from "../policy/engine.js";
 import { ChallengeService, createChallengeResponse } from "../challenge/challenge-service.js";
 import { Redis } from "ioredis";
+import { GatewayConfig } from "../types/config.js";
 
 export class SentinelGateway {
   protected app: express.Application;
@@ -17,7 +18,7 @@ export class SentinelGateway {
   protected redis: Redis;
   private backendUrl: string;
 
-  constructor(config: { backendUrl: string; redisUrl: string; llmDeepModel: string; llmFastModel: string }) {
+  constructor(config: GatewayConfig) {
     this.app = express();
     this.backendUrl = config.backendUrl;
     this.redis = new Redis(config.redisUrl);
@@ -47,7 +48,7 @@ export class SentinelGateway {
   }
 
   /**
-   * Handle challenge verification requests
+   * Handle challenge verification requests with rate limiting
    */
   private async handleChallengeVerification(req: Request, res: Response): Promise<void> {
     const { challengeId, solution } = req.body;
@@ -56,6 +57,22 @@ export class SentinelGateway {
       res.status(400).json({
         error: "Missing required fields",
         required: ["challengeId", "solution"]
+      });
+      return;
+    }
+
+    // Rate limit challenge verification attempts by IP
+    const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0] || req.socket.remoteAddress || "unknown";
+    const rateLimitResult = await this.checkRateLimit(`challenge:${clientIp}`, {
+      maxRequests: 10, // Max 10 verification attempts
+      windowSeconds: 60 // Per minute
+    });
+
+    if (rateLimitResult.limited) {
+      res.status(429).json({
+        error: "Too many verification attempts",
+        retryAfter: rateLimitResult.resetIn,
+        remaining: 0
       });
       return;
     }
@@ -282,12 +299,14 @@ export class SentinelGateway {
       target: this.backendUrl,
       changeOrigin: true,
       on: {
-        proxyReq: (proxyReq: any, req: any) => {
+        proxyReq: (proxyReq, req) => {
           // Add internal headers for backend
           const context = (req as any).sentinelContext;
-          proxyReq.setHeader("X-Gazorpazorp-Agent-Id", context.agent.id);
-          proxyReq.setHeader("X-Gazorpazorp-Risk-Score", context.analysis.riskScore);
-          proxyReq.setHeader("X-Gazorpazorp-Verified", "true");
+          if (context) {
+            proxyReq.setHeader("X-Gazorpazorp-Agent-Id", context.agent.id);
+            proxyReq.setHeader("X-Gazorpazorp-Risk-Score", context.analysis.riskScore.toString());
+            proxyReq.setHeader("X-Gazorpazorp-Verified", "true");
+          }
         }
       }
     });

@@ -85,8 +85,8 @@ export class PolicyEngine {
     }
   }
 
-  private getNestedValue(obj: any, path: string): any {
-    return path.split(".").reduce((acc, key) => acc?.[key], obj);
+  private getNestedValue(obj: Record<string, any>, path: string): unknown {
+    return path.split(".").reduce((acc: any, key: string) => acc?.[key], obj);
   }
 
   private async logDecision(context: PolicyContext, rule: PolicyRule): Promise<void> {

@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import { Redis } from "ioredis";
 import { SentinelGateway } from "../gateway/sentinel.js";
+import { GatewayConfig } from "../types/config.js";
 
 interface AgentProfile {
   id: string;
@@ -207,7 +208,7 @@ export class AnomalyDetector {
 export class EnhancedSentinelGateway extends SentinelGateway {
   private anomalyDetector: AnomalyDetector;
 
-  constructor(config: any) {
+  constructor(config: GatewayConfig) {
     super(config);
     this.anomalyDetector = new AnomalyDetector(this.redis);
   }

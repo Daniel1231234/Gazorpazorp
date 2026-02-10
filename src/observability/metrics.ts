@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import prometheus from "prom-client";
-import { SentinelGateway } from "../gateway/gazorpazorp.js";
+import { SentinelGateway } from "../gateway/sentinel.js";
 
 export class SentinelMetrics {
   private static instance: SentinelMetrics;
@@ -84,7 +84,7 @@ export class SentinelMetrics {
     return await prometheus.register.metrics();
   }
 
-  public async getJSON(): Promise<any> {
+  public async getJSON(): Promise<prometheus.MetricObjectWithValues<prometheus.MetricValue<string>>[]> {
     const metrics = await prometheus.register.getMetricsAsJSON();
     return metrics;
   }
@@ -150,7 +150,7 @@ export class ObservableSentinelGateway extends SentinelGateway {
 
   // Expose metrics endpoint
   public setupMetricsEndpoint(): void {
-    this.app.get("/metrics", async (req, res) => {
+    this.app.get("/metrics", async (req: Request, res: Response) => {
       res.set("Content-Type", prometheus.register.contentType);
       res.end(await this.metrics.getMetrics());
     });

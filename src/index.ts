@@ -1,17 +1,18 @@
 // src/index.ts
-import { SentinelGateway } from "./gateway/gazorpazorp.js";
+import { SentinelGateway } from "./gateway/sentinel.js";
 import { CachedIntentAnalyzer } from "./cache/analysis-cache.js";
 import { AnomalyDetector } from "./behavioral/anomaly-detector.js";
 import { SentinelMetrics } from "./observability/metrics.js";
 import { logger } from "./utils/logger.js";
 import { Request, Response, NextFunction } from "express";
 import { createDashboardRouter } from "./dashboard/api.js";
+import { GatewayConfig } from "./types/config.js";
 
 class ProductionGateway extends SentinelGateway {
   private metrics = SentinelMetrics.getInstance();
   private anomalyDetector: AnomalyDetector;
 
-  constructor(config: any) {
+  constructor(config: GatewayConfig) {
     super(config);
     this.anomalyDetector = new AnomalyDetector(this.redis);
 

@@ -69,6 +69,7 @@ return 0
 export class KeyStore {
   private redis: Redis;
   private readonly PREFIX = "agent:identity:";
+  private readonly AGENT_ID_INDEX_PREFIX = "agent:id_to_fingerprint:";
   private readonly REPUTATION_LOG_PREFIX = "agent:reputation_log:";
   private readonly IDENTITY_TTL = 86400 * 365; // 1 year
 
@@ -95,10 +96,17 @@ export class KeyStore {
 
   /**
    * Save agent identity with TTL.
+   * Also creates an index from agent ID to fingerprint for fast lookups.
    */
   async saveIdentity(identity: AgentIdentity): Promise<void> {
     const key = `${this.PREFIX}${identity.fingerprint}`;
-    await this.redis.setex(key, this.IDENTITY_TTL, JSON.stringify(identity));
+    const indexKey = `${this.AGENT_ID_INDEX_PREFIX}${identity.id}`;
+
+    // Use pipeline for atomic writes
+    const pipeline = this.redis.pipeline();
+    pipeline.setex(key, this.IDENTITY_TTL, JSON.stringify(identity));
+    pipeline.setex(indexKey, this.IDENTITY_TTL, identity.fingerprint);
+    await pipeline.exec();
   }
 
   /**
@@ -116,6 +124,19 @@ export class KeyStore {
     identity.lastSeen = new Date(identity.lastSeen);
 
     return identity;
+  }
+
+  /**
+   * Get agent identity by agent ID.
+   * Uses the agent ID index to find the fingerprint, then retrieves the identity.
+   */
+  async getIdentityByAgentId(agentId: string): Promise<AgentIdentity | null> {
+    const indexKey = `${this.AGENT_ID_INDEX_PREFIX}${agentId}`;
+    const fingerprint = await this.redis.get(indexKey);
+
+    if (!fingerprint) return null;
+
+    return this.getIdentity(fingerprint);
   }
 
   /**

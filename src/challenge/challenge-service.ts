@@ -1,6 +1,7 @@
 // src/challenge/challenge-service.ts
-import { randomBytes, createHash } from "crypto";
+import { randomBytes, createHash, createPublicKey, verify } from "crypto";
 import { Redis } from "ioredis";
+import { KeyStore } from "../crypto/key-store.js";
 
 /**
  * Challenge types that can be issued to agents.
@@ -41,11 +42,13 @@ export interface ChallengeResult {
  */
 export class ChallengeService {
   private redis: Redis;
+  private keyStore: KeyStore;
   private readonly CHALLENGE_TTL = 300; // 5 minutes
   private readonly CHALLENGE_PREFIX = "challenge:";
 
   constructor(redis: Redis) {
     this.redis = redis;
+    this.keyStore = new KeyStore(redis);
   }
 
   /**
@@ -106,7 +109,7 @@ export class ChallengeService {
         break;
 
       case "signature_refresh":
-        valid = this.verifySignatureRefresh(response.solution, challenge.nonce!);
+        valid = await this.verifySignatureRefresh(response.solution, challenge.nonce!, challenge.agentId);
         break;
 
       case "rate_delay":
@@ -203,12 +206,36 @@ export class ChallengeService {
   /**
    * Verify signature refresh solution.
    * The solution should be the challenge nonce signed by the agent.
+   *
+   * SECURITY: This verifies cryptographic signature of the nonce using the agent's
+   * registered public key, preventing trivial bypasses.
    */
-  private verifySignatureRefresh(solution: string, expectedNonce: string): boolean {
-    // In a full implementation, this would verify a cryptographic signature
-    // For now, we just check that the solution contains the nonce
-    // The actual signature verification happens in the crypto layer
-    return solution.includes(expectedNonce);
+  private async verifySignatureRefresh(
+    solution: string,
+    expectedNonce: string,
+    agentId: string
+  ): Promise<boolean> {
+    try {
+      // Get agent's identity from key store
+      const agent = await this.keyStore.getIdentityByAgentId(agentId);
+      if (!agent) {
+        return false;
+      }
+
+      // Verify that the solution is a valid signature of the nonce
+      const publicKey = createPublicKey(agent.publicKey);
+      const isValid = verify(
+        null,
+        Buffer.from(expectedNonce),
+        publicKey,
+        Buffer.from(solution, "hex")
+      );
+
+      return isValid;
+    } catch (error) {
+      // Signature verification failed
+      return false;
+    }
   }
 }
 

@@ -87,6 +87,28 @@ const createMockRedis = () => {
       };
       return multiObj;
     }),
+    pipeline: vi.fn(() => {
+      const commands: Array<{ cmd: string; args: any[] }> = [];
+      const pipelineObj = {
+        setex: (key: string, ttl: number, value: string) => {
+          commands.push({ cmd: "setex", args: [key, ttl, value] });
+          return pipelineObj;
+        },
+        exec: async () => {
+          const results: Array<[null, any]> = [];
+          for (const { cmd, args } of commands) {
+            if (cmd === "setex") {
+              // Args: [key, ttl, value]
+              store.set(args[0], args[2]);
+              expiry.set(args[0], Date.now() + args[1] * 1000);
+              results.push([null, "OK"]);
+            }
+          }
+          return results;
+        }
+      };
+      return pipelineObj;
+    }),
     defineCommand: vi.fn((name: string, options: any) => {
       (redisMock as any)[name] = vi.fn(async (...args: any[]) => {
         if (name === "updateReputationAtomic") {
@@ -234,11 +256,16 @@ describe("KeyStore", () => {
 
       await keyStore.saveIdentity(identity);
 
-      expect(redis.setex).toHaveBeenCalledWith(
-        "agent:identity:abc123",
-        expect.any(Number),
-        expect.any(String)
-      );
+      // Check that pipeline was used for atomic writes (2 setex calls for identity + index)
+      expect(redis.pipeline).toHaveBeenCalled();
+
+      // Verify the identity data was stored
+      const savedIdentity = (redis as any)._store.get("agent:identity:abc123");
+      expect(savedIdentity).toBeDefined();
+
+      const parsed = JSON.parse(savedIdentity);
+      expect(parsed.id).toBe("agent_123");
+      expect(parsed.fingerprint).toBe("abc123");
     });
   });
 
